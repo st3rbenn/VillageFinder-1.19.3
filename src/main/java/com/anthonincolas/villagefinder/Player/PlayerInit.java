@@ -2,6 +2,7 @@ package com.anthonincolas.villagefinder.Player;
 
 import com.anthonincolas.villagefinder.Init.ItemInit;
 import com.anthonincolas.villagefinder.Item.Utils;
+import com.anthonincolas.villagefinder.Utils.MessageDisplay;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
@@ -40,17 +41,6 @@ public class PlayerInit extends PlayerEvent {
         MinecraftForge.EVENT_BUS.register(playerInit);
     }
 
-    public static void sendMessage(String message) {
-        Style style = Style.EMPTY.withColor(TextColor.fromRgb(COLOR_BLUE + COLOR_RED));
-        Component messageToDisplay = Component.nullToEmpty(message).copy().withStyle(style);
-        player.sendSystemMessage(messageToDisplay);
-    }
-
-    public static void sendMessage(String message, Style style) {
-        Component messageToDisplay = Component.nullToEmpty(message).copy().withStyle(style);
-        player.displayClientMessage(messageToDisplay, true);
-    }
-
     public static String getPlayerName() {
         return player.getName().getString();
     }
@@ -65,9 +55,9 @@ public class PlayerInit extends PlayerEvent {
 
     private void checkIfIsFirstPlayerConnectionToWorld() {
         if(nbt.contains("villagefinder")) {
-            sendMessage("Welcome back " + getPlayerName() + " Mod Village Finder Load");
+            MessageDisplay.sendMessage(getPlayer(), "Welcome back " + getPlayerName() + " Mod Village Finder Load");
         } else {
-            sendMessage("Welcome " + getPlayerName() + " Mod Village Finder Load");
+            MessageDisplay.sendMessage(getPlayer(), "Welcome " + getPlayerName() + " Mod Village Finder Load");
             nbt.putBoolean("villagefinder", true);
             Utils.GiveCompass();
         }

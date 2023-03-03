@@ -2,6 +2,7 @@ package com.anthonincolas.villagefinder.Item;
 
 import com.anthonincolas.villagefinder.ClientAccess;
 import com.anthonincolas.villagefinder.Player.PlayerInit;
+import com.anthonincolas.villagefinder.Utils.MessageDisplay;
 import com.mojang.blaze3d.audio.Library;
 import com.mojang.logging.LogUtils;
 import it.unimi.dsi.fastutil.longs.LongSet;
@@ -42,11 +43,13 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkStatus;
 import net.minecraft.world.level.entity.EntityTickList;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureFeatureIndexSavedData;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
 import net.minecraft.world.level.levelgen.structure.StructureType;
+import net.minecraft.world.level.levelgen.structure.structures.JigsawStructure;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 import net.minecraftforge.api.distmarker.Dist;
@@ -56,29 +59,32 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.DistExecutor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3d;
+import org.joml.Vector3dc;
 import org.slf4j.Logger;
 
 import javax.swing.text.html.Option;
 import java.lang.reflect.Field;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 public class VillageCompassProperties extends Item {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    private static final int SEARCHING_VILLAGE_RADIUS = 10;
+    private static final int SEARCHING_VILLAGE_RADIUS = 15;
+    private static final Set<ChunkPos> PROCESSED_CHUNKS = new HashSet<>();
+    private static final int MIN_DISTANCE_BETWEEN_VILLAGES = 200;
+    private static BlockPos previousVillagePosition;
+    private static final SoundEvent ORB_PICKUP_SOUND = SoundEvents.EXPERIENCE_ORB_PICKUP;
 
-    private int villagePositionX;
-    private int villagePositionY;
-    private int villagePositionZ;
+    private static int villagePositionX;
+    private static int villagePositionY;
+    private static int villagePositionZ;
 
-    private boolean isVillageFound = false;
-    private boolean canUserBeTeleported = false;
+    private static boolean isVillageFound = false;
+    private static boolean canUserBeTeleported = false;
 
     private static final int MAX_STACK_SIZE = 1;
-    SoundEvent sound = SoundEvents.EXPERIENCE_ORB_PICKUP;
 
     public VillageCompassProperties(Item.Properties properties) {
         super(properties);
@@ -96,21 +102,23 @@ public class VillageCompassProperties extends Item {
 
         if(!isClient && isMainHand) {
             Style searchingStyle = Style.EMPTY.withColor(TextColor.parseColor("blue"));
-            PlayerInit.sendMessage("Recherche en cours...", searchingStyle);
-            if(detectNearbyVillage(player)) {
-                Style style = Style.EMPTY.withColor(TextColor.parseColor("blue"));
-                PlayerInit.sendMessage("Village trouvé !", style);
-                PlayerInit.getPlayer().playSound(sound, 1.0F, 1.0F);
-                PlayerInit.sendMessage("Position du village : " + villagePositionX + " " + villagePositionY + " " + villagePositionZ, style);
+            MessageDisplay.sendMessage(player, "Recherche en cours...", searchingStyle, true);
+            player.getCooldowns().addCooldown(this, 50000);
+            detectNearbyVillage(player);
+            if(isVillageFound) {
+                player.playSound(ORB_PICKUP_SOUND, 1.0f, 1.0f);
+                player.getCooldowns().removeCooldown(this);
                 canUserBeTeleported = true;
             } else {
+                player.getCooldowns().removeCooldown(this);
                 Style style = Style.EMPTY.withColor(TextColor.parseColor("red"));
-                PlayerInit.sendMessage("Aucun village trouvé", style);
+                MessageDisplay.sendMessage(player, "Aucun village trouvé", style, true);
             }
         }
 
-        if(!isClient && isMainHand && Screen.hasShiftDown()) {
+        if(!isClient && Screen.hasShiftDown() && isMainHand) {
             if(canUserBeTeleported) {
+                MessageDisplay.sendMessage(player, "Téléportation en cours...", MessageDisplay.messageColorBlue, true);
                 player.teleportTo(villagePositionX, villagePositionY, villagePositionZ);
             }
         }
@@ -124,37 +132,95 @@ public class VillageCompassProperties extends Item {
         DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientAccess.advancedItemTooltip(components, "Appuyer sur shift pour plus d'information"));
     }
 
-    public boolean detectNearbyVillage(Player player) {
-        int chunkX = player.chunkPosition().x;
-        int chunkZ = player.chunkPosition().z;
+    public static void detectNearbyVillage(Player player) {
+        /*if (isVillageFound) {
+            return;
+        }*/
 
+        int playerChunkX = player.chunkPosition().x;
+        int playerChunkZ = player.chunkPosition().z;
         Level level = player.getLevel();
-        MinecraftServer server = level.getServer();
 
-        for(int x = chunkX - SEARCHING_VILLAGE_RADIUS; x <= chunkX + SEARCHING_VILLAGE_RADIUS; x++) {
-            for(int z = chunkZ - SEARCHING_VILLAGE_RADIUS; z <= chunkZ + SEARCHING_VILLAGE_RADIUS; z++) {
-                ChunkPos chunkPos = new ChunkPos(x, z);
+        for (int chunkX = playerChunkX - SEARCHING_VILLAGE_RADIUS; chunkX <= playerChunkX + SEARCHING_VILLAGE_RADIUS; chunkX++) {
+            for (int chunkZ = playerChunkZ - SEARCHING_VILLAGE_RADIUS; chunkZ <= playerChunkZ + SEARCHING_VILLAGE_RADIUS; chunkZ++) {
+                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
+                BlockPos villagePos = chunkPos.getWorldPosition();
+
+                if (!PROCESSED_CHUNKS.add(chunkPos)) {
+                    MessageDisplay.sendMessage(player, "Chunk déjà traité", MessageDisplay.messageColorRed, true);
+                    continue;
+                }
+
+                if (!level.isAreaLoaded(villagePos, 16)) {
+                    MessageDisplay.sendMessage(player, "Chunk non chargé", MessageDisplay.messageColorRed, true);
+                    continue;
+                }
+
+                /*if(previousVillagePosition != null) {
+                    int distanceBetweenVillages = (int) Math.sqrt(Math.pow(previousVillagePosition.getX() - villagePos.getX(), 2) + Math.pow(previousVillagePosition.getZ() - villagePos.getZ(), 2));
+                    if(distanceBetweenVillages < MIN_DISTANCE_BETWEEN_VILLAGES) {
+                        MessageDisplay.sendMessage(player, "Vous êtes trop proche ", MessageDisplay.messageColorRed, true);
+                        continue;
+                    }
+                }*/
+
                 ChunkAccess chunk = level.getChunk(chunkPos.x, chunkPos.z);
-                TagKey<Structure> structureTags = StructureTags.VILLAGE;
+                /*MessageDisplay.sendMessage(player, "Chunk : " + chunkPos.x + " " + chunkPos.z, MessageDisplay.messageColorBlue);*/
                 Map<Structure, StructureStart> structures = chunk.getAllStarts();
-                if(!structures.isEmpty()){
-                    for(Structure structure : structures.keySet()) {
-                        Structure village = structures.get(structure).getStructure();
-                        boolean chunkContaineVillage = village.modifiableStructureInfo().getOriginalStructureInfo().structureSettings().toString().contains("village");
-                        if(chunkContaineVillage) {
-                            StructureStart villageStart = structures.get(structure);
-                            LOGGER.info("village ? " + village.modifiableStructureInfo().getOriginalStructureInfo().structureSettings().toString().contains("village"));
-                            BlockPos villagePos = villageStart.getBoundingBox().getCenter();
-                            villagePositionY = villagePos.getY();
-                            villagePositionX = villagePos.getX();
-                            villagePositionZ = villagePos.getZ();
-                            return true;
-                        }
+
+                if(!PROCESSED_CHUNKS.isEmpty())
+                    PROCESSED_CHUNKS.clear();
+
+                for (Map.Entry<Structure, StructureStart> entry : structures.entrySet()) {
+                    Structure feature = entry.getKey();
+                    boolean chunkContainsVillage = feature.modifiableStructureInfo().getOriginalStructureInfo()
+                            .structureSettings().toString().contains("village");
+                    MessageDisplay.sendMessage(player, "Village ICI", MessageDisplay.messageColorGreen, true);
+
+                    if(chunkContainsVillage) {
+                        StructureStart villageStart = structures.get(feature);
+                        villagePos = villageStart.getBoundingBox().getCenter();
+                        villagePositionX = villagePos.getX();
+                        villagePositionY = villagePos.getY();
+                        villagePositionZ = villagePos.getZ();
+                        canUserBeTeleported = true;
+                        isVillageFound = true;
+                        MessageDisplay.sendMessage(player, "Village trouvé !", MessageDisplay.messageColorGreen, true);
+                        MessageDisplay.sendMessage(player, "Position du village : " + villagePos.getX() + " " + villagePos.getY() + " " + villagePos.getZ(), MessageDisplay.messageColorBlue);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+
+    public static boolean isVillageInChunk(ChunkAccess chunk) {
+        Map<Structure, StructureStart> structureMap = chunk.getAllStarts();
+        for (Map.Entry<Structure, StructureStart> entry : structureMap.entrySet()) {
+            Structure feature = entry.getKey();
+            if (feature instanceof JigsawStructure) {
+                for (Structure structure : structureMap.keySet()) {
+                    Structure village = structureMap.get(structure).getStructure();
+                    StructureStart villageStart = structureMap.get(structure);
+                    BlockPos villagePos = villageStart.getBoundingBox().getCenter();
+                    boolean chunkContaineVillage = village.modifiableStructureInfo()
+                            .getOriginalStructureInfo().structureSettings().toString().contains("village");
+                    if (chunkContaineVillage) {
+                        villagePositionY = villagePos.getY();
+                        villagePositionX = villagePos.getX();
+                        villagePositionZ = villagePos.getZ();
+                        return true;
                     }
                 }
             }
         }
         return false;
+    }
+
+    public static ChunkAccess harvestChunk(ChunkPos chunkPos, Level level) {
+        ChunkAccess chunk = level.getChunk(chunkPos.x, chunkPos.z);
+        return chunk;
     }
 
 }
