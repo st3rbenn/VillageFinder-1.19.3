@@ -1,6 +1,7 @@
 package com.anthonincolas.villagefinder.Mixin;
 
 import com.anthonincolas.villagefinder.Init.ItemInit;
+import com.anthonincolas.villagefinder.Item.VillageCompassProperties;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.spongepowered.asm.mixin.Mixin;
@@ -14,10 +15,10 @@ public abstract class PlayerMixin {
 
     @Inject(method = "tick", at = @At("TAIL"))
     private void tick(CallbackInfo ci){
-        ItemStack villageCompass = ((Player)(Object)this).getInventory().getSelected();
-        if(villageCompass.getItem() == ItemInit.VILLAGE_COMPASS.get()) {
-            float angle = ((getYRot() % 360) + 360) % 360;
-            villageCompass.getOrCreateTag().putFloat("angle", angle);
+        ItemStack itemHand = ((Player)(Object)this).getInventory().getSelected();
+        if(itemHand.getItem() == ItemInit.VILLAGE_COMPASS.get()) {
+            /*float angle = VillageCompassProperties.getCenterOfVillage() - ((getYRot() % 360) + 360) % 360;
+            itemHand.getOrCreateTag().putFloat("angle", angle);*/
         }
     }
 }
